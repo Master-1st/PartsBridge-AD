@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lcsc-altium-loader"
+version = "0.3.1"
+description = "Search LCSC and append confirmed parts to long-term Altium libraries"
+requires-python = ">=3.11,<3.13"
+license = { file = "LICENSE" }
+dependencies = [
+  "easyeda2kicad==1.0.1",
+  "altium-monkey==2026.8.21",
+]
+
+[project.scripts]
+lcsc-altium = "lcsc_altium_loader.cli:main"
+lcsc-altium-gui = "lcsc_altium_loader.gui:run"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
