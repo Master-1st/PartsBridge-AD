@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Iterable
 
 from . import __version__
+from .ad_refresh import refresh_ad_libraries, refresh_after_publish
 from .client import ClientError, LCSCClient
 from .convert import prepare_libraries
 from .integrity import verify_output
@@ -101,6 +102,9 @@ def _cmd_prepare(args: argparse.Namespace) -> int:
     except RuntimeError as exc:
         print(f"无法追加到长期总库：{exc}", file=sys.stderr)
         return 1
+    manifest["ad_refresh"] = refresh_after_publish(
+        manifest, output, enabled=bool(args.refresh_ad)
+    )
     print(
         json.dumps(
             {
@@ -121,11 +125,30 @@ def _cmd_prepare(args: argparse.Namespace) -> int:
                     if manifest["backup_directory"] is not None
                     else None
                 ),
+                "ad_refresh": manifest["ad_refresh"],
             },
             ensure_ascii=False,
         )
     )
     return status
+
+
+def _cmd_refresh_ad(args: argparse.Namespace) -> int:
+    output = Path(args.output).expanduser() if args.output else default_output_dir()
+    result = refresh_ad_libraries(output)
+    if args.json:
+        print(
+            json.dumps(
+                {"output": str(output.resolve()), "ad_refresh": result},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+    else:
+        print(f"{result.get('status', 'failed')}\t{result.get('message', '')}")
+        if result.get("receipt_path"):
+            print(f"receipt_path\t{result['receipt_path']}")
+    return 0 if bool(result.get("verified")) else 1
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
@@ -239,7 +262,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="request embedded STEP data (default: enabled)",
     )
+    prepare.add_argument(
+        "--refresh-ad",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="refresh Altium Designer libraries after publication (default: enabled)",
+    )
     prepare.set_defaults(func=_cmd_prepare)
+    refresh_ad = sub.add_parser("refresh-ad", help="refresh Altium Designer library caches")
+    refresh_ad.add_argument(
+        "--output", default=None, help="long-term library directory (default: remembered directory)"
+    )
+    refresh_ad.add_argument("--json", action="store_true")
+    refresh_ad.set_defaults(func=_cmd_refresh_ad)
     doctor = sub.add_parser("doctor", help="check runtime, signer and optional network access")
     doctor.add_argument("--online", action="store_true")
     doctor.add_argument("--json", action="store_true")

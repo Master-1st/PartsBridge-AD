@@ -1,6 +1,6 @@
 # 元件库桥（PartsBridge AD）
 
-0.3.1 修复：带 3D 高度偏移或旋转的新元件可正常追加；模型元数据与封装实例使用一致的姿态，完整性校验仍然开启。0.3.0 未发布的失败批次可以重试，无需清空旧库。
+0.3.4 修复：独立 PcbLib 改用 PCB 专用枚举器回读，解决旧版把封装数误读为 0 的校验问题。警告显示符号/封装的实际与期望数量；仍须两类清单的数量、名称都匹配才报告成功。保留追加后自动刷新、独立“刷新 AD 库”按钮、0.3.3 的脚本作用域修复，以及 3D 姿态与历史元件保留校验；不重启 AD、不模拟鼠标键盘、不自动提权。
 
 面向 Windows 和 Altium Designer 的本地桌面工具：以立创商城/LCSC 为元件检索与来源线索，先让用户确认 C 编号，再追加到原生 `SchLib` / `PcbLib` 总库。软件不读取浏览器 Cookie、不要求商城账号，也不会自动把模糊匹配结果写入工程。
 
@@ -31,13 +31,32 @@ cd <解压后的源代码目录>
 1. 输入 C 编号、制造商料号（MPN）或关键词并搜索；
 2. 核对品牌、MPN、封装、数据手册和中国站商品页，手动加入生成队列；
 3. 选择自己电脑上存在且可写的长期总库目录，点击“追加到总库”；
-4. 在 Altium 中打开两个库文件，并按数据手册做最终工程复核。
+4. 首次使用时在 Altium 的 Components 面板中安装这两份文件库；后续追加由工具请求刷新，并按数据手册做最终工程复核。
 
 关键词/近似匹配只产生候选，不会自动选料。追加操作保留历史：已有 C 编号直接跳过，不下载数据，也不自动更新模型；只有新增且完整通过检查的元件才会进入总库。追加前请在 Altium 中保存并关闭 `LCSC.SchLib` 与 `LCSC.PcbLib`；应用自己的锁不能阻止 Altium 对已打开文件的写入。界面的查询和追加都在后台线程运行，可停止；停止、冲突、并发修改或整批失败都不会覆盖上一次已发布的库。
 
 `_Lib` 目录只保留 `LCSC.SchLib` 和 `LCSC.PcbLib`，不写原理图。`manifest.json`、`last-run.json`、锁文件和每次发布前的备份位于 `%LOCALAPPDATA%\PartsBridge-AD` 下的每库 `state_directory`（运行结果会显示实际绝对路径）。
 上次明确选择的总库目录偏好保存在 `%LOCALAPPDATA%\PartsBridge-AD`。
 `manifest.json` 是库外索引，不是原生库本体；完整且可解析的旧库即使没有旧 manifest，也可以直接接入并从原生库重建索引，不要求重新下载元件。
+
+## 更新后刷新 AD 库
+
+界面默认勾选“追加后刷新 AD 库”。真正发布了新增元件后，工具在库文件事务及锁结束后，通过 AD 自带脚本接口请求：重载这两份已打开且没有未保存修改的库、刷新已安装库缓存、清除 Components 面板缓存。不会保存或关闭原本打开的库/工程、卸载/重新安装库，也不会删除 AD 配置目录。重复料号全部跳过、整批失败或取消时，不自动刷新。
+
+原理图符号由组件库接口回读，PCB 封装由 PCB library iterator 枚举，不能把这两类库混用一个组件计数接口。目标 PcbLib 若尚未加载，工具会通过 AD 接口临时打开它用于回读，不调用 `ShowDocument`；仅当该文档由本次打开且回读后仍无修改时才关闭。原本存在的文档始终保留；若检测到未保存修改则停止后续操作，不保存或强制关闭。AD 对临时加载的具体界面呈现仍需实机确认。
+
+“刷新 AD 库”按钮只重试刷新，不查料、不下载、不重新生成库。刷新失败会与“库已追加”分开报告；不会回滚已生成的库，也不会把部分成功的追加误报成整批失败。脚本和回执保存在 `%LOCALAPPDATA%\PartsBridge-AD\ad-refresh`，不放进总库目录。未收到回执或条目不匹配时不会显示“刷新成功”。超时请求会失效，不会在之后的会话中无限等待执行。
+
+运行条件：
+
+- 仅支持 Windows；当前会话中需要有且只有一个正在运行的 Altium Designer。AD 没运行时只跳过，不主动启动。
+- AD 与元件库桥需要相同运行权限。推荐都以普通权限运行；如果 AD 已以管理员身份运行，需用相同权限启动元件库桥。程序不会主动申请提权或更改系统设置。
+- 这两份库存在未保存编辑时停止刷新，保护编辑内容；其他原理图/PCB 工程不会被保存、关闭或重载。
+- AD 弹窗或交互操作可能阻塞脚本；结束操作后可点击“刷新 AD 库”。
+
+如果 0.3.2 弹出 `Can't access top level variable` / `Continue execution?`，先选择 No 停止旧脚本。如果 0.3.3 报数量不匹配、封装数被误读为 0，关闭旧版元件库桥，完整解压并运行 0.3.4，然后仅点击“刷新 AD 库”；不必重新追加或下载。
+
+本机已核实 AD 26.9.1 的命令注册和权限保护路径；用户实机回执确认 0.3.3 已执行到条目回读，但旧版独立 PcbLib 查询方式不正确。0.3.4 已按 PCB API 修正并通过回归测试。当前自动验证进程仍与 AD 权限不同，且不能读取管理员发布后的正式库字节；尚未完成 0.3.4 的真实脚本、临时文档和面板可见性验收。详见 `VALIDATION_REPORT.md`。接口依据：[Altium 脚本运行](https://www.altium.com/documentation/altium-designer/scripting/running-scripts)、[文档重载](https://www.altium.com/documentation/altium-dxp-developer/iserverdocument-interface)、[PCB 库枚举](https://www.altium.com/documentation/altium-dxp-developer/pcb-api-system-interfaces-reference)、[文档打开与关闭](https://www.altium.com/documentation/altium-dxp-developer/iclient-interface)、[DelphiScript 作用域限制](https://www.altium.com/documentation/altium-designer/scripting/delphiscript/delphi-differences?version=23)。
 
 ## 批量 CSV
 
@@ -65,9 +84,15 @@ cd <解压后的源代码目录>
 
 # 默认请求下载并嵌入 STEP；可显式关闭
 .\.venv\Scripts\lcsc-altium.exe prepare C25804 --no-with-3d
+
+# 单独刷新 AD，不下载、不重新生成
+.\.venv\Scripts\lcsc-altium.exe refresh-ad --output D:\PartsBridge\_Lib --json
+
+# 本次追加不请求刷新 AD
+.\.venv\Scripts\lcsc-altium.exe prepare C25804 --no-refresh-ad
 ```
 
-`prepare` 未指定 `--output` 时使用界面上次提交追加的目录；0.3.1 尚未选择过时的默认值为 `G:\dontdel\AD\_Lib`。首次使用请主动选择自己的目录，没有 G 盘时必须改选；CLI 可用 `--output` 指定。CLI 显式 `--output` 只影响该次命令，不改写界面偏好。
+`prepare` 未指定 `--output` 时使用界面上次提交追加的目录；尚未选择过时的默认值为 `G:\dontdel\AD\_Lib`。首次使用请主动选择自己的目录，没有 G 盘时必须改选；CLI 可用 `--output` 指定。CLI 显式 `--output` 只影响该次命令，不改写界面偏好。
 
 ## 自检和总库验真
 

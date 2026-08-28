@@ -15,6 +15,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from . import __version__
+from .ad_refresh import refresh_ad_libraries, refresh_after_publish
 from .client import LCSCClient
 from .convert import BatchCancelled, prepare_libraries
 from .jlc_api import JLCOpenApiSettings
@@ -54,6 +55,7 @@ class PartsBridgeApp(ttk.Frame):
         self.in_stock_var = tk.BooleanVar(value=True)
         self.output_var = tk.StringVar(value=str(default_output_dir()))
         self.with_3d_var = tk.BooleanVar(value=True)
+        self.auto_refresh_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="就绪")
         self.official_var = tk.StringVar(value=self._official_status())
 
@@ -235,6 +237,10 @@ class PartsBridgeApp(ttk.Frame):
             variable=self.with_3d_var,
         )
         self.three_d_check.grid(row=1, column=1, sticky="w", pady=(6, 0))
+        self.auto_refresh_check = ttk.Checkbutton(
+            output, text="追加后刷新 AD 库", variable=self.auto_refresh_var
+        )
+        self.auto_refresh_check.grid(row=2, column=1, sticky="w", pady=(6, 0))
         self.generate_button = ttk.Button(
             output, text="追加到总库", command=self.generate
         )
@@ -243,6 +249,10 @@ class PartsBridgeApp(ttk.Frame):
             output, text="停止", command=self.cancel, state="disabled"
         )
         self.cancel_button.grid(row=1, column=3, pady=(6, 0))
+        self.refresh_ad_button = ttk.Button(
+            output, text="刷新 AD 库", command=self.refresh_ad
+        )
+        self.refresh_ad_button.grid(row=2, column=2, padx=(0, 6), pady=(6, 0))
         ttk.Label(
             output,
             text=(
@@ -251,7 +261,7 @@ class PartsBridgeApp(ttk.Frame):
                 "追加前请在 Altium 保存并关闭这两份库；工程使用前仍需复核。"
             ),
             wraplength=900,
-        ).grid(row=2, column=1, columnspan=3, sticky="w", pady=(6, 0))
+        ).grid(row=3, column=1, columnspan=3, sticky="w", pady=(6, 0))
 
         log_frame = ttk.LabelFrame(self, text="运行日志", padding=6)
         log_frame.grid(row=4, column=0, sticky="nsew", pady=(8, 0))
@@ -282,6 +292,8 @@ class PartsBridgeApp(ttk.Frame):
             self.add_button,
             self.remove_button,
             self.clear_button,
+            self.auto_refresh_check,
+            self.refresh_ad_button,
         ]
         self.query_entry.focus_set()
 
@@ -568,10 +580,11 @@ class PartsBridgeApp(ttk.Frame):
             return
         output = Path(output_text).expanduser()
         with_3d = bool(self.with_3d_var.get())
+        auto_refresh = bool(self.auto_refresh_var.get())
 
         def worker() -> tuple[dict[str, Any], int]:
             remember_output_dir(output)
-            return prepare_libraries(
+            manifest, status = prepare_libraries(
                 self.client_factory(),
                 codes,
                 output,
@@ -579,6 +592,10 @@ class PartsBridgeApp(ttk.Frame):
                 progress=self._progress_event,
                 cancelled=self.cancel_event.is_set,
             )
+            manifest["ad_refresh"] = refresh_after_publish(
+                manifest, output, enabled=auto_refresh
+            )
+            return manifest, status
 
         def success(value: tuple[dict[str, Any], int]) -> None:
             manifest, status = value
@@ -633,25 +650,61 @@ class PartsBridgeApp(ttk.Frame):
                 f"失败 {failure_count} 个，总量 {total_components} 个；"
                 f"状态 {state}，退出码 {status}。"
             )
+            refresh = manifest.get("ad_refresh", {})
+            refresh_message = str(refresh.get("message", ""))
+            refresh_warning = bool(refresh) and refresh.get("status") not in {
+                "refreshed", "disabled", "not_needed", "not_running",
+            }
             self._log(
                 ("追加完成：" if not failure_count else "追加结束但有失败：")
                 + summary
                 + f"库外维护目录：{state_directory}；备份：{backup_directory}。"
                 + f"{three_d_summary}{failure_summary}"
             )
-            dialog = messagebox.showwarning if failure_count else messagebox.showinfo
+            if refresh_message:
+                self._log("AD 刷新：" + refresh_message)
+            dialog = messagebox.showwarning if failure_count or refresh_warning else messagebox.showinfo
             dialog(
-                "总库追加有失败" if failure_count else "总库追加完成",
+                "总库追加有失败" if failure_count else "总库已追加，AD 刷新待处理" if refresh_warning else "总库追加完成",
                 f"{summary}\n"
                 f"总库：{output}\n"
                 f"库外维护目录：{state_directory}\n"
                 f"发布前备份：{backup_directory}\n"
-                f"{three_d_summary}{failure_summary}\n\n"
+                f"{three_d_summary}{failure_summary}\n"
+                f"AD 刷新：{refresh_message}\n\n"
                 "工程使用前仍需复核数据手册、焊盘和 Pin 1。",
                 parent=self.master,
             )
 
         self._start_job("正在追加到长期总库", worker, success)
+
+    def _report_ad_refresh(self, result: Any) -> None:
+        if not isinstance(result, dict):
+            return
+        status = str(result.get("status", "failed"))
+        message = str(result.get("message", "未返回刷新结果"))
+        normal_statuses = {"refreshed", "disabled", "not_needed", "not_running"}
+        if status in normal_statuses:
+            self._log("AD 刷新：" + message)
+            dialog = messagebox.showinfo
+            title = "AD 库刷新结果"
+        else:
+            self._log("AD 刷新警告：" + message)
+            dialog = messagebox.showwarning
+            title = "AD 库刷新警告"
+        dialog(title, message, parent=self.master)
+
+    def refresh_ad(self) -> None:
+        output_text = self.output_var.get().strip()
+        if not output_text:
+            messagebox.showwarning("缺少总库目录", "请选择长期总库目录。", parent=self.master)
+            return
+        output = Path(output_text).expanduser()
+
+        def worker() -> dict[str, Any]:
+            return refresh_ad_libraries(output)
+
+        self._start_job("正在刷新 AD 库", worker, self._report_ad_refresh)
 
     def cancel(self) -> None:
         if self.busy:

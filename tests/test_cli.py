@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import tempfile
 import io
+import json
 import runpy
 import sys
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -51,6 +52,76 @@ class CliTests(unittest.TestCase):
         self.assertTrue(args.with_3d)
         self.assertIsNone(build_parser().parse_args(["verify"]).output)
         self.assertFalse(build_parser().parse_args(["prepare", "C1", "--no-with-3d"]).with_3d)
+        self.assertTrue(args.refresh_ad)
+        self.assertFalse(build_parser().parse_args(["prepare", "C1", "--no-refresh-ad"]).refresh_ad)
+
+    def test_refresh_only_parser_accepts_remembered_or_explicit_directory(self) -> None:
+        self.assertIsNone(build_parser().parse_args(["refresh-ad"]).output)
+        args = build_parser().parse_args(["refresh-ad", "--output", "library", "--json"])
+        self.assertEqual(args.output, "library")
+        self.assertTrue(args.json)
+
+    def test_refresh_only_never_downloads_or_generates(self) -> None:
+        stream = io.StringIO()
+        expected = {"status": "refreshed", "verified": True, "message": "AD 已回执"}
+        with patch("lcsc_altium_loader.cli.refresh_ad_libraries", return_value=expected) as refresh, \
+             patch("lcsc_altium_loader.cli._client") as client, \
+             patch("lcsc_altium_loader.cli.prepare_libraries") as prepare, redirect_stdout(stream):
+            status = main(["refresh-ad", "--output", "library", "--json"])
+        self.assertEqual(status, 0)
+        self.assertEqual(json.loads(stream.getvalue())["ad_refresh"], expected)
+        refresh.assert_called_once_with(Path("library"))
+        client.assert_not_called()
+        prepare.assert_not_called()
+
+    def test_refresh_only_without_verified_ack_returns_nonzero(self) -> None:
+        stream = io.StringIO()
+        with patch("lcsc_altium_loader.cli.refresh_ad_libraries", return_value={"status": "timeout", "verified": False, "message": "未收到回执"}), \
+             patch("lcsc_altium_loader.cli.default_output_dir", return_value=Path("remembered")), redirect_stdout(stream):
+            status = main(["refresh-ad"])
+        self.assertEqual(status, 1)
+        self.assertIn("未收到回执", stream.getvalue())
+
+    def test_prepare_keeps_publication_exit_code_even_when_refresh_fails(self) -> None:
+        for publication_status in (0, 2):
+            manifest = {
+                "components": [{"code": "C1"}], "published": True, "added_count": 1,
+                "skipped_count": 0, "total_components": 1, "added_codes": ["C1"], "skipped": [],
+                "failures": [] if publication_status == 0 else [{"code": "C2", "error": "not available"}],
+                "status": "complete" if publication_status == 0 else "partial",
+                "state_directory": "state", "backup_directory": None,
+            }
+            stream = io.StringIO()
+            order = []
+
+            def prepare(*_args, **_kwargs):
+                order.append("prepare_returned")
+                return manifest, publication_status
+
+            def refresh(*_args, **_kwargs):
+                order.append("refresh")
+                return {"status": "permission_required", "verified": False, "message": "权限不一致"}
+
+            with self.subTest(publication_status=publication_status), \
+                 patch("lcsc_altium_loader.cli._client", return_value=object()), \
+                 patch("lcsc_altium_loader.cli.prepare_libraries", side_effect=prepare), \
+                 patch("lcsc_altium_loader.cli.refresh_after_publish", side_effect=refresh) as bridge, redirect_stdout(stream):
+                status = main(["prepare", "C1", "--output", "library"])
+            self.assertEqual(status, publication_status)
+            self.assertEqual(order, ["prepare_returned", "refresh"])
+            self.assertTrue(bridge.call_args.kwargs["enabled"])
+            value = json.loads(stream.getvalue())
+            self.assertEqual(value["added_count"], 1)
+            self.assertEqual(value["ad_refresh"]["status"], "permission_required")
+            self.assertEqual(value["status"], publication_status)
+
+    def test_failed_prepare_never_reaches_refresh_hook(self) -> None:
+        with patch("lcsc_altium_loader.cli._client", return_value=object()), \
+             patch("lcsc_altium_loader.cli.prepare_libraries", side_effect=RuntimeError("not published")), \
+             patch("lcsc_altium_loader.cli.refresh_after_publish") as refresh, redirect_stderr(io.StringIO()):
+            status = main(["prepare", "C1", "--output", "library"])
+        self.assertEqual(status, 1)
+        refresh.assert_not_called()
 
     def test_default_and_remembered_directory_live_outside_library(self) -> None:
         with tempfile.TemporaryDirectory() as temporary, patch.dict("os.environ", {"LOCALAPPDATA": temporary}):
