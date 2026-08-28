@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import altium_monkey as altium
 
+from lcsc_altium_loader.ad_refresh import RefreshError
 from lcsc_altium_loader.convert import BatchCancelled, ConversionError, _add_footprint, _add_symbol, prepare_libraries
 from lcsc_altium_loader.integrity import native_inventory, preserved_inventory, verify_output
 from lcsc_altium_loader.library_store import LIBRARY_NAMES, LibraryStore, state_directory
@@ -33,6 +34,9 @@ class MasterLibraryTests(unittest.TestCase):
         )
         self.fetch = fetch_patch.start()
         self.addCleanup(fetch_patch.stop)
+        preflight_patch = patch("lcsc_altium_loader.convert.preflight_ad_write", return_value=None)
+        self.preflight = preflight_patch.start()
+        self.addCleanup(preflight_patch.stop)
 
     def library_bytes(self) -> dict[str, bytes]:
         return {name: (self.output / name).read_bytes() for name in LIBRARY_NAMES}
@@ -47,6 +51,19 @@ class MasterLibraryTests(unittest.TestCase):
         self.assertEqual({item.name for item in symbols.symbols}, {"C1_SYMBOL", "C2_SYMBOL"})
         self.assertEqual({item.name for item in footprints.footprints}, {"C1_PKG", "C2_PKG"})
         self.assertEqual({item["code"] for item in manifest["components"]}, {"C1", "C2"})
+        self.assertEqual(manifest["software"]["publisher"], "foke")
+
+    def test_ad_permission_preflight_blocks_before_store_directory_or_fetch(self) -> None:
+        self.preflight.side_effect = RefreshError(
+            "permission_required", "已在下载和写库前停止，不会自动提权。",
+        )
+        with patch("lcsc_altium_loader.convert.LibraryStore") as store:
+            with self.assertRaisesRegex(RefreshError, "下载和写库前停止"):
+                prepare_libraries(object(), ["C1"], self.output)
+        store.assert_not_called()
+        self.fetch.assert_not_called()
+        self.assertFalse(self.output.exists())
+        self.assertFalse(state_directory(self.output).exists())
 
     def test_repeated_code_does_not_fetch_or_rewrite_libraries(self) -> None:
         prepare_libraries(object(), ["C1"], self.output)
@@ -164,6 +181,30 @@ class MasterLibraryTests(unittest.TestCase):
         self.fetch.reset_mock()
         with self.assertRaisesRegex(ConversionError, "symbol-footprint link is unresolved"):
             prepare_libraries(object(), ["C2"], self.output)
+        self.fetch.assert_not_called()
+        self.assertEqual(self.library_bytes(), before)
+
+    def test_broken_link_identifies_post_publish_change_and_complete_backup_pair(self) -> None:
+        prepare_libraries(object(), ["C1"], self.output)
+        second, _status = prepare_libraries(object(), ["C2"], self.output)
+        backup = Path(second["backup_directory"])
+        self.assertTrue(all((backup / name).is_file() for name in LIBRARY_NAMES))
+        pcb = altium.AltiumPcbLib()
+        pcb.add_footprint("SOME_OTHER_FOOTPRINT")
+        pcb.save(self.output / "LCSC.PcbLib")
+        before = self.library_bytes()
+        self.fetch.reset_mock()
+
+        with self.assertRaises(ConversionError) as caught:
+            prepare_libraries(object(), ["C3"], self.output)
+
+        message = str(caught.exception)
+        self.assertIn("local symbol-footprint link is unresolved", message)
+        self.assertIn("上次发布后的库校验值已变化：LCSC.PcbLib", message)
+        self.assertNotIn("LCSC.SchLib、LCSC.PcbLib", message)
+        self.assertIn("不是同一次发布的配对文件", message)
+        self.assertIn(str(backup), message)
+        self.assertIn("成对恢复", message)
         self.fetch.assert_not_called()
         self.assertEqual(self.library_bytes(), before)
 

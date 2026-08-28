@@ -14,7 +14,8 @@ from typing import Any, Callable, Iterable
 import altium_monkey as altium
 from easyeda2kicad import EasyedaFootprintImporter, EasyedaSymbolImporter
 
-from . import __version__
+from . import __publisher__, __version__
+from .ad_refresh import preflight_ad_write
 from .client import EASYEDA_COMPONENT_URL, LCSC_DETAIL_URL, ClientError, LCSCClient
 from .integrity import existing_components, native_inventory, preserved_inventory, verify_output
 from .library_store import LIBRARY_NAMES, LibraryStore, output_metadata, write_json
@@ -978,6 +979,54 @@ def _notify_progress(
             pass
 
 
+def _native_inventory_recovery_hint(
+    error: Exception,
+    manifest: dict[str, Any],
+    baseline: dict[str, Any],
+) -> str:
+    """Add a recovery hint only for a proven post-publish native-link change."""
+    if "local symbol-footprint link is unresolved" not in str(error):
+        return ""
+    if manifest.get("schema_version") != 3 or manifest.get("published") is not True:
+        return ""
+    outputs = manifest.get("outputs")
+    if not isinstance(outputs, dict):
+        return ""
+
+    def metadata(value: Any) -> tuple[int, str] | None:
+        if not isinstance(value, dict):
+            return None
+        size = value.get("size")
+        sha256 = value.get("sha256")
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            return None
+        if not isinstance(sha256, str) or re.fullmatch(r"[0-9a-fA-F]{64}", sha256) is None:
+            return None
+        return size, sha256.casefold()
+
+    changed: list[str] = []
+    for name in LIBRARY_NAMES:
+        published = metadata(outputs.get(name))
+        current = metadata(baseline.get(name))
+        if published is None or current is None:
+            return ""
+        if published != current:
+            changed.append(name)
+    if not changed:
+        return ""
+    hint = (
+        "；上次发布后的库校验值已变化："
+        + "、".join(changed)
+        + "；当前 SchLib/PcbLib 可能已不是同一次发布的配对文件。"
+    )
+    backup_directory = manifest.get("backup_directory")
+    if manifest.get("retained_previous_libraries") is True and isinstance(backup_directory, str):
+        backup = Path(backup_directory)
+        if backup.is_absolute() and all((backup / name).is_file() for name in LIBRARY_NAMES):
+            hint += f"可人工核对并成对恢复的发布前备份：{backup}。"
+    return hint
+
+
 def prepare_libraries(
     client: LCSCClient,
     codes: Iterable[str],
@@ -999,6 +1048,8 @@ def prepare_libraries(
     if not unique_codes:
         raise ValueError("no LCSC codes supplied")
 
+    preflight_ad_write()
+
     def check_cancelled() -> None:
         if cancelled is not None and cancelled():
             raise BatchCancelled("library generation cancelled before publication")
@@ -1012,7 +1063,9 @@ def prepare_libraries(
         skipped: list[dict[str, Any]] = []
         manifest: dict[str, Any] = {
             "schema_version": 3,
-            "software": {"name": "PartsBridge AD", "version": __version__},
+            "software": {
+                "name": "PartsBridge AD", "version": __version__, "publisher": __publisher__,
+            },
             "run_id": store.run_id,
             "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "mode": "append",
@@ -1050,13 +1103,15 @@ def prepare_libraries(
         try:
             check_cancelled()
             previous_dir = store.snapshot()
+            previous_manifest = store.read_manifest()
             try:
                 previous_inventory = native_inventory(previous_dir)
             except Exception as exc:
+                hint = _native_inventory_recovery_hint(exc, previous_manifest, store.baseline)
                 raise ConversionError(
-                    f"无法安全读取现有总库；已停止追加，未覆盖文件：{exc}"
+                    f"无法安全读取现有总库；已停止追加，未覆盖文件：{exc}{hint}"
                 ) from exc
-            previous_components = existing_components(previous_inventory, store.read_manifest())
+            previous_components = existing_components(previous_inventory, previous_manifest)
             manifest["components"] = previous_components
             manifest["native_inventory"] = previous_inventory
             manifest["total_components"] = len(previous_components)

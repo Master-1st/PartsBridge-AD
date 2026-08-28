@@ -3,6 +3,33 @@ from pathlib import Path
 import sys
 
 from PyInstaller.utils.hooks import collect_all, collect_data_files, copy_metadata
+from PyInstaller.utils.win32 import versioninfo
+
+
+app_version = (0, 3, 5, 0)
+version_resource = versioninfo.VSVersionInfo(
+    ffi=versioninfo.FixedFileInfo(filevers=app_version, prodvers=app_version),
+    kids=[
+        versioninfo.StringFileInfo(
+            [
+                versioninfo.StringTable(
+                    '080404B0',
+                    [
+                        versioninfo.StringStruct('CompanyName', 'foke'),
+                        versioninfo.StringStruct('FileDescription', 'PartsBridge AD'),
+                        versioninfo.StringStruct('FileVersion', '0.3.5.0'),
+                        versioninfo.StringStruct('InternalName', 'PartsBridge-AD'),
+                        versioninfo.StringStruct('LegalCopyright', 'Copyright (c) 2026 foke'),
+                        versioninfo.StringStruct('OriginalFilename', 'PartsBridge-AD.exe'),
+                        versioninfo.StringStruct('ProductName', 'PartsBridge AD'),
+                        versioninfo.StringStruct('ProductVersion', '0.3.5.0'),
+                    ],
+                )
+            ]
+        ),
+        versioninfo.VarFileInfo([versioninfo.VarStruct('Translation', [2052, 1200])]),
+    ],
+)
 
 datas = []
 binaries = []
@@ -50,6 +77,7 @@ exe = EXE(
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
+    version=version_resource,
     codesign_identity=None,
     entitlements_file=None,
 )

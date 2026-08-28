@@ -4,8 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lcsc-altium-loader"
-version = "0.3.4"
+version = "0.3.5"
 description = "Search LCSC and append confirmed parts to long-term Altium libraries"
+authors = [{ name = "foke" }]
 requires-python = ">=3.11,<3.13"
 license = { file = "LICENSE" }
 dependencies = [

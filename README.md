@@ -1,6 +1,10 @@
 # 元件库桥（PartsBridge AD）
 
-0.3.4 修复：独立 PcbLib 改用 PCB 专用枚举器回读，解决旧版把封装数误读为 0 的校验问题。警告显示符号/封装的实际与期望数量；仍须两类清单的数量、名称都匹配才报告成功。保留追加后自动刷新、独立“刷新 AD 库”按钮、0.3.3 的脚本作用域修复，以及 3D 姿态与历史元件保留校验；不重启 AD、不模拟鼠标键盘、不自动提权。
+0.3.5 安全更新：在下载和写入长期总库前检查正在运行的 AD。AD 未运行时允许离线追加；AD 正在运行时必须只有一个同会话实例，且与元件库桥权限一致，否则直接停止。现有符号—封装链接失配时，新版会依据上次成功发布的 SHA-256/大小指出发布后被改写的库文件；只有完整配对备份真实存在时才给出恢复位置。完整性检查没有放宽，不自动提权或恢复、覆盖总库。
+
+**维护与发布：foke**
+
+Windows EXE 文件属性会显示公司/发布名称 `foke`。这属于产品元数据，不是 Authenticode 数字签名；未签名程序在 SmartScreen 或 UAC 中仍可能显示“未知发布者”。只有由受信任证书签名才能成为 Windows 所称的“已验证发布者”。
 
 面向 Windows 和 Altium Designer 的本地桌面工具：以立创商城/LCSC 为元件检索与来源线索，先让用户确认 C 编号，再追加到原生 `SchLib` / `PcbLib` 总库。软件不读取浏览器 Cookie、不要求商城账号，也不会自动把模糊匹配结果写入工程。
 
@@ -51,12 +55,13 @@ cd <解压后的源代码目录>
 
 - 仅支持 Windows；当前会话中需要有且只有一个正在运行的 Altium Designer。AD 没运行时只跳过，不主动启动。
 - AD 与元件库桥需要相同运行权限。推荐都以普通权限运行；如果 AD 已以管理员身份运行，需用相同权限启动元件库桥。程序不会主动申请提权或更改系统设置。
+- 0.3.5 在器件下载和总库目录创建前执行上述权限检查；多 AD 会话、权限不一致或无法可靠判断时均停止。AD 未运行不影响离线建库。
 - 这两份库存在未保存编辑时停止刷新，保护编辑内容；其他原理图/PCB 工程不会被保存、关闭或重载。
 - AD 弹窗或交互操作可能阻塞脚本；结束操作后可点击“刷新 AD 库”。
 
 如果 0.3.2 弹出 `Can't access top level variable` / `Continue execution?`，先选择 No 停止旧脚本。如果 0.3.3 报数量不匹配、封装数被误读为 0，关闭旧版元件库桥，完整解压并运行 0.3.4，然后仅点击“刷新 AD 库”；不必重新追加或下载。
 
-本机已核实 AD 26.9.1 的命令注册和权限保护路径；用户实机回执确认 0.3.3 已执行到条目回读，但旧版独立 PcbLib 查询方式不正确。0.3.4 已按 PCB API 修正并通过回归测试。当前自动验证进程仍与 AD 权限不同，且不能读取管理员发布后的正式库字节；尚未完成 0.3.4 的真实脚本、临时文档和面板可见性验收。详见 `VALIDATION_REPORT.md`。接口依据：[Altium 脚本运行](https://www.altium.com/documentation/altium-designer/scripting/running-scripts)、[文档重载](https://www.altium.com/documentation/altium-dxp-developer/iserverdocument-interface)、[PCB 库枚举](https://www.altium.com/documentation/altium-dxp-developer/pcb-api-system-interfaces-reference)、[文档打开与关闭](https://www.altium.com/documentation/altium-dxp-developer/iclient-interface)、[DelphiScript 作用域限制](https://www.altium.com/documentation/altium-designer/scripting/delphiscript/delphi-differences?version=23)。
+本机已核实 AD 26.9.1 的命令注册和权限保护路径。0.3.5 使用当前在线数据按“C32713268 → C192062 → 再追加”的顺序完成隔离复现，包含 STEP 嵌入的符号、封装和模型再次读取均通过；因此真实日志中的失配不能归因于 C192062 本身。若上次发布清单与当前文件哈希不同，新版会报告发生变化的文件和可核对的完整配对备份。当前自动验证进程仍与管理员 AD 权限不同；尚未完成 0.3.5 的同权限 AD 实际追加、脚本回读、临时文档和面板可见性验收。详见 `VALIDATION_REPORT.md`。接口依据：[Altium 脚本运行](https://www.altium.com/documentation/altium-designer/scripting/running-scripts)、[文档重载](https://www.altium.com/documentation/altium-dxp-developer/iserverdocument-interface)、[PCB 库枚举](https://www.altium.com/documentation/altium-dxp-developer/pcb-api-system-interfaces-reference)、[文档打开与关闭](https://www.altium.com/documentation/altium-dxp-developer/iclient-interface)、[DelphiScript 作用域限制](https://www.altium.com/documentation/altium-designer/scripting/delphiscript/delphi-differences?version=23)。
 
 ## 批量 CSV
 

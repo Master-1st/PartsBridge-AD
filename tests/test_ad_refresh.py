@@ -77,6 +77,46 @@ class RefreshGateTests(unittest.TestCase):
             launch.assert_not_called()
 
 
+class AppendPreflightTests(unittest.TestCase):
+    def test_non_windows_allows_offline_append_without_native_probe(self) -> None:
+        with patch.object(ad_refresh.sys, "platform", "linux"), \
+             patch.object(ad_refresh, "_running_altium") as running:
+            self.assertIsNone(ad_refresh.preflight_ad_write())
+        running.assert_not_called()
+
+    def test_no_ad_or_one_same_privilege_session_allows_append(self) -> None:
+        instance = ad_refresh.AltiumInstance(123, Path("X2.exe"))
+        for running_ad, expected in ((None, None), (instance, instance)):
+            with self.subTest(running_ad=running_ad), \
+                 patch.object(ad_refresh.sys, "platform", "win32"), \
+                 patch.object(ad_refresh, "_running_altium", return_value=running_ad):
+                self.assertIs(ad_refresh.preflight_ad_write(), expected)
+
+    def test_permission_mismatch_and_multiple_sessions_block_before_write(self) -> None:
+        for status, expected in (("permission_required", "相同运行权限"), ("ambiguous", "只保留一个")):
+            with self.subTest(status=status), \
+                 patch.object(ad_refresh.sys, "platform", "win32"), \
+                 patch.object(
+                     ad_refresh, "_running_altium",
+                     side_effect=ad_refresh.RefreshError(status, "original"),
+                 ):
+                with self.assertRaises(ad_refresh.RefreshError) as caught:
+                    ad_refresh.preflight_ad_write()
+            self.assertEqual(caught.exception.status, status)
+            self.assertIn(expected, str(caught.exception))
+            self.assertIn("下载和写库前停止", str(caught.exception))
+            self.assertIn("不会自动提权", str(caught.exception))
+
+    def test_unexpected_probe_failure_is_fail_closed(self) -> None:
+        with patch.object(ad_refresh.sys, "platform", "win32"), \
+             patch.object(ad_refresh, "_running_altium", side_effect=OSError("probe failed")):
+            with self.assertRaises(ad_refresh.RefreshError) as caught:
+                ad_refresh.preflight_ad_write()
+        self.assertEqual(caught.exception.status, "permission_required")
+        self.assertIn("无法可靠确认", str(caught.exception))
+        self.assertIn("不会自动提权", str(caught.exception))
+
+
 class RefreshProtocolTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()

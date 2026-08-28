@@ -146,6 +146,9 @@ class ConversionTests(unittest.TestCase):
         environment = patch.dict(os.environ, {"LOCALAPPDATA": self.state.name})
         environment.start()
         self.addCleanup(environment.stop)
+        preflight = patch("lcsc_altium_loader.convert.preflight_ad_write", return_value=None)
+        preflight.start()
+        self.addCleanup(preflight.stop)
 
     def test_import_restores_vertical_pin_path_and_authored_origin(self) -> None:
         source = minimal_symbol()

@@ -41,6 +41,10 @@ _PERMISSION_MESSAGE = (
     "AD 与元件库桥的运行权限不一致，Windows 阻止了刷新。"
     "请用相同权限运行两者，再点击“刷新 AD 库”；无需重新下载元件。"
 )
+_PREFLIGHT_STOP_MESSAGE = (
+    "已在下载和写库前停止，不会自动提权。"
+    "请让 AD 与元件库桥以相同权限运行后再试。"
+)
 
 
 def _running_altium() -> AltiumInstance | None:
@@ -139,6 +143,32 @@ def _running_altium() -> AltiumInstance | None:
         return AltiumInstance(pids[0], Path(buffer.value))
     finally:
         kernel.CloseHandle(handle)
+
+
+def preflight_ad_write() -> AltiumInstance | None:
+    """Allow offline work or one same-privilege AD session, and fail closed otherwise.
+
+    The probe is read-only: it only inspects the current process and running
+    X2 session.  It never starts AD, requests elevation, or touches a library.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        return _running_altium()
+    except RefreshError as exc:
+        status = exc.status if exc.status in {"permission_required", "ambiguous"} else "permission_required"
+        if exc.status == "ambiguous":
+            reason = "检测到多个 AD 会话，请只保留一个需要使用的 AD 会话"
+        elif exc.status == "permission_required":
+            reason = "无法确认 AD 与元件库桥具有相同运行权限"
+        else:
+            reason = str(exc) or "AD 权限预检失败"
+        raise RefreshError(status, f"{reason}；{_PREFLIGHT_STOP_MESSAGE}") from exc
+    except Exception as exc:
+        raise RefreshError(
+            "permission_required",
+            f"无法可靠确认 AD 的运行权限（{exc}）；{_PREFLIGHT_STOP_MESSAGE}",
+        ) from exc
 
 
 def _check_commands(executable: Path) -> None:
