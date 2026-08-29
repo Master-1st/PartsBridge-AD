@@ -1,12 +1,16 @@
 # 元件库桥（PartsBridge AD）
 
-0.3.5 安全更新：在下载和写入长期总库前检查正在运行的 AD。AD 未运行时允许离线追加；AD 正在运行时必须只有一个同会话实例，且与元件库桥权限一致，否则直接停止。现有符号—封装链接失配时，新版会依据上次成功发布的 SHA-256/大小指出发布后被改写的库文件；只有完整配对备份真实存在时才给出恢复位置。完整性检查没有放宽，不自动提权或恢复、覆盖总库。
+0.3.8 安全修复：源码中的 PCB 焊盘恢复工具改为只替换等长的 `Pads6/Data` 原生流，不再重写整份 PcbDoc。模型表数量、3D Body 引用、原生流清单和非目标流哈希均须通过检查；任何失配都会停止并删除未通过验证的输出。真实故障板已在 AD 26.9.1 中完成恢复后重新打开和原生保存，个人板文件、库和模型不会进入仓库或发布包。
+
+0.3.7 修复 3D 模型约一半埋入 PCB：工具读取旋转后 STEP 的真实最低点，再映射到立创定义的目标最低高度。贴片件底面自动贴板，插件件继续保留针脚穿板深度，不再把立创 Z 坐标重复叠加到 STEP 上。STEP 边界无法解析时保守沿用来源偏移并记录警告。
+
+0.3.6 中国站搜索更新：搜索和 C 编号详情优先读取立创 EDA 中国站公开数据，中国站无结果或请求失败时才回退原有全球公开接口，解决同一型号在中国商城有货、海外数据分区却没有记录的问题。当前在线实测 `TD331SCANH` / `C7527764` 可返回国内库存、人民币价格、SMD-9 封装和中国商城商品页，并可生成带 STEP 3D 的 Altium 原生库。
 
 **维护与发布：foke**
 
 Windows EXE 文件属性会显示公司/发布名称 `foke`。这属于产品元数据，不是 Authenticode 数字签名；未签名程序在 SmartScreen 或 UAC 中仍可能显示“未知发布者”。只有由受信任证书签名才能成为 Windows 所称的“已验证发布者”。
 
-面向 Windows 和 Altium Designer 的本地桌面工具：以立创商城/LCSC 为元件检索与来源线索，先让用户确认 C 编号，再追加到原生 `SchLib` / `PcbLib` 总库。软件不读取浏览器 Cookie、不要求商城账号，也不会自动把模糊匹配结果写入工程。
+面向 Windows 和 Altium Designer 的本地桌面工具：以立创商城中国站/LCSC 为元件检索与来源线索，先让用户确认 C 编号，再追加到原生 `SchLib` / `PcbLib` 总库。软件不读取浏览器 Cookie、不要求商城账号，也不会自动把模糊匹配结果写入工程。
 
 > 独立第三方互操作工具，与嘉立创、立创商城、EasyEDA 或 Altium 无隶属、授权或背书关系；相关名称和商标归各自权利人所有。
 
@@ -55,13 +59,13 @@ cd <解压后的源代码目录>
 
 - 仅支持 Windows；当前会话中需要有且只有一个正在运行的 Altium Designer。AD 没运行时只跳过，不主动启动。
 - AD 与元件库桥需要相同运行权限。推荐都以普通权限运行；如果 AD 已以管理员身份运行，需用相同权限启动元件库桥。程序不会主动申请提权或更改系统设置。
-- 0.3.5 在器件下载和总库目录创建前执行上述权限检查；多 AD 会话、权限不一致或无法可靠判断时均停止。AD 未运行不影响离线建库。
+- 0.3.5 起在器件下载和总库目录创建前执行上述权限检查；多 AD 会话、权限不一致或无法可靠判断时均停止。AD 未运行不影响离线建库。
 - 这两份库存在未保存编辑时停止刷新，保护编辑内容；其他原理图/PCB 工程不会被保存、关闭或重载。
 - AD 弹窗或交互操作可能阻塞脚本；结束操作后可点击“刷新 AD 库”。
 
 如果 0.3.2 弹出 `Can't access top level variable` / `Continue execution?`，先选择 No 停止旧脚本。如果 0.3.3 报数量不匹配、封装数被误读为 0，关闭旧版元件库桥，完整解压并运行 0.3.4，然后仅点击“刷新 AD 库”；不必重新追加或下载。
 
-本机已核实 AD 26.9.1 的命令注册和权限保护路径。0.3.5 使用当前在线数据按“C32713268 → C192062 → 再追加”的顺序完成隔离复现，包含 STEP 嵌入的符号、封装和模型再次读取均通过；因此真实日志中的失配不能归因于 C192062 本身。若上次发布清单与当前文件哈希不同，新版会报告发生变化的文件和可核对的完整配对备份。当前自动验证进程仍与管理员 AD 权限不同；尚未完成 0.3.5 的同权限 AD 实际追加、脚本回读、临时文档和面板可见性验收。详见 `VALIDATION_REPORT.md`。接口依据：[Altium 脚本运行](https://www.altium.com/documentation/altium-designer/scripting/running-scripts)、[文档重载](https://www.altium.com/documentation/altium-dxp-developer/iserverdocument-interface)、[PCB 库枚举](https://www.altium.com/documentation/altium-dxp-developer/pcb-api-system-interfaces-reference)、[文档打开与关闭](https://www.altium.com/documentation/altium-dxp-developer/iclient-interface)、[DelphiScript 作用域限制](https://www.altium.com/documentation/altium-designer/scripting/delphiscript/delphi-differences?version=23)。
+本机已核实 AD 26.9.1 的命令注册和权限保护路径。0.3.5 使用当前在线数据按“C32713268 → C192062 → 再追加”的顺序完成隔离复现，包含 STEP 嵌入的符号、封装和模型再次读取均通过；因此真实日志中的失配不能归因于 C192062 本身。0.3.6 另以中国站在线数据完成 `TD331SCANH` / `C7527764` 精确搜索及隔离建库，SchLib、PcbLib、内嵌 STEP、原生回读和链接验证均通过。0.3.7 使用 7 个真实贴片/插件 STEP 验证最低点归一化及原生 PcbLib 回读。0.3.8 另完成真实 PcbDoc 恢复、重新打开及 AD 原生保存，证明模型表失配已消除；该验证不包含个人设计数据。若上次发布清单与当前文件哈希不同，新版会报告发生变化的文件和可核对的完整配对备份。当前自动验证进程仍与管理员 AD 权限不同；尚未完成 0.3.8 的同权限 AD 实际追加、脚本回读、临时文档和面板可见性验收。详见 `VALIDATION_REPORT.md`。接口依据：[Altium 脚本运行](https://www.altium.com/documentation/altium-designer/scripting/running-scripts)、[文档重载](https://www.altium.com/documentation/altium-dxp-developer/iserverdocument-interface)、[PCB 库枚举](https://www.altium.com/documentation/altium-dxp-developer/pcb-api-system-interfaces-reference)、[文档打开与关闭](https://www.altium.com/documentation/altium-dxp-developer/iclient-interface)、[DelphiScript 作用域限制](https://www.altium.com/documentation/altium-designer/scripting/delphiscript/delphi-differences?version=23)。
 
 ## 批量 CSV
 
@@ -143,7 +147,7 @@ cd <解压后的源代码目录>
 ## 数据与证据边界
 
 - 中国站商品链接来自 `item.szlcsc.com`；
-- 候选中的价格来自 LCSC Global，明确标为 `USD` / `price_source=global`，不会按汇率伪装成人民币成交价；
+- 中国站候选使用中国站返回的人民币阶梯首价并标为 `CNY` / `price_source=china`；只有中国站无结果或请求失败时使用全球回退结果的 `USD` / `price_source=global`，不会自行换算或伪装成交价；
 - 库清单记录数据 URL、抓取时间/缓存状态、源 JSON SHA-256、输出文件 SHA-256 和转换警告；
 - `manual_review_required` 始终为 `true`。
 

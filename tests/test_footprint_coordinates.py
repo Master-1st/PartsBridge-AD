@@ -119,22 +119,64 @@ class FootprintCoordinateTests(unittest.TestCase):
         pad = footprint.pads[0]
         self.assertAlmostEqual((pad.rotation + pad.slot_rotation) % 180, 135)
 
-    def test_3d_uses_already_converted_translation_without_double_y_flip(self) -> None:
+    def test_3d_normalizes_step_bottom_and_does_not_double_flip_y(self) -> None:
         source = footprint_source()
         source.model_3d = SimpleNamespace(
             uuid="12345678", rotation=SimpleNamespace(x=0, y=0, z=0),
-            translation=SimpleNamespace(x=1.27, y=-2.54, z=.508),
+            translation=SimpleNamespace(x=1.27, y=-2.54, z=0),
         )
         library = altium.AltiumPcbLib()
         footprint = library.add_footprint("MODEL")
         with patch.object(library, "add_footprint", return_value=footprint), \
+             patch("lcsc_altium_loader.convert.altium.compute_step_model_bounds_mils", return_value=SimpleNamespace(min_z_mils=-25, max_z_mils=25)), \
              patch.object(library, "add_embedded_model", return_value=object()), \
              patch.object(footprint, "add_embedded_3d_model") as body:
-            _add_footprint(library, source, "MODEL", COMPONENT, [], step_data=b"test", three_d_requested=True)
+            _, _, three_d = _add_footprint(library, source, "MODEL", COMPONENT, [], step_data=b"test", three_d_requested=True)
         args = body.call_args.kwargs
         self.assertAlmostEqual(args["location_mils"][0], 50)
         self.assertAlmostEqual(args["location_mils"][1], -100)
-        self.assertAlmostEqual(args["standoff_height_mils"], 20)
+        self.assertAlmostEqual(args["standoff_height_mils"], 25)
+        self.assertEqual(three_d["placement"]["normalization"], "step_bottom_to_source_min_z")
+        self.assertAlmostEqual(three_d["placement"]["final_min_z_mils"], 0)
+
+    def test_3d_normalization_preserves_through_hole_pin_depth(self) -> None:
+        source = footprint_source()
+        source.model_3d = SimpleNamespace(
+            uuid="12345678", rotation=SimpleNamespace(x=0, y=0, z=0),
+            translation=SimpleNamespace(x=0, y=0, z=-3.5),
+        )
+        library = altium.AltiumPcbLib()
+        footprint = library.add_footprint("MODEL")
+        source_min_z_mils = -3.5 * 1000 / 25.4
+        with patch.object(library, "add_footprint", return_value=footprint), \
+             patch("lcsc_altium_loader.convert.altium.compute_step_model_bounds_mils", return_value=SimpleNamespace(min_z_mils=source_min_z_mils, max_z_mils=8.5 * 1000 / 25.4)), \
+             patch.object(library, "add_embedded_model", return_value=object()) as embedded, \
+             patch.object(footprint, "add_embedded_3d_model") as body:
+            _, _, three_d = _add_footprint(library, source, "MODEL", COMPONENT, [], step_data=b"test", three_d_requested=True)
+        self.assertAlmostEqual(embedded.call_args.kwargs["z_offset_mils"], 0)
+        self.assertAlmostEqual(body.call_args.kwargs["standoff_height_mils"], 0)
+        self.assertAlmostEqual(
+            three_d["placement"]["final_min_z_mils"], source_min_z_mils, places=5
+        )
+
+    def test_3d_normalization_falls_back_without_dropping_model(self) -> None:
+        source = footprint_source()
+        source.model_3d = SimpleNamespace(
+            uuid="12345678", rotation=SimpleNamespace(x=0, y=0, z=0),
+            translation=SimpleNamespace(x=0, y=0, z=.508),
+        )
+        library = altium.AltiumPcbLib()
+        footprint = library.add_footprint("MODEL")
+        warnings: list[str] = []
+        with patch.object(library, "add_footprint", return_value=footprint), \
+             patch("lcsc_altium_loader.convert.altium.compute_step_model_bounds_mils", side_effect=ValueError("bad STEP")), \
+             patch.object(library, "add_embedded_model", return_value=object()), \
+             patch.object(footprint, "add_embedded_3d_model") as body:
+            _, _, three_d = _add_footprint(library, source, "MODEL", COMPONENT, warnings, step_data=b"test", three_d_requested=True)
+        self.assertAlmostEqual(body.call_args.kwargs["standoff_height_mils"], 20)
+        self.assertEqual(three_d["status"], "embedded")
+        self.assertEqual(three_d["placement"]["normalization"], "source_offset_fallback")
+        self.assertTrue(any("normalization unavailable" in warning for warning in warnings))
 
 
 if __name__ == "__main__":

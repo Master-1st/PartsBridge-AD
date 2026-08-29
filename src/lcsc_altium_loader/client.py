@@ -28,6 +28,7 @@ from .models import Candidate
 LCSC_SEARCH_URL = "https://wmsc.lcsc.com/ftps/wm/search/v3/global"
 LCSC_CATEGORY_URL = "https://wmsc.lcsc.com/ftps/wm/product/query/list"
 LCSC_DETAIL_URL = "https://wmsc.lcsc.com/ftps/wm/product/detail"
+LCSC_CHINA_SEARCH_URL = "https://pro.lceda.cn/api/eda/product/search"
 EASYEDA_COMPONENT_URL = "https://easyeda.com/api/products/{code}/components?version=6.5.37"
 EASYEDA_STEP_URL = "https://modules.easyeda.com/qAxj6KHrDKw4blvCG8QJPs7Y/{uuid}"
 _CODE_RE = re.compile(r"^C\d+$", re.IGNORECASE)
@@ -47,7 +48,7 @@ class LCSCClient:
         retries: int = 2,
         min_interval: float = 0.15,
         easyeda_min_interval: float = 3.2,
-        user_agent: str = "partsbridge-ad/0.2",
+        user_agent: str = "partsbridge-ad/0.3.8",
         cache_dir: str | Path | bool | None = None,
         component_cache_seconds: float = 7 * 24 * 60 * 60,
     ) -> None:
@@ -151,6 +152,45 @@ class LCSCClient:
             return f"https://item.szlcsc.com/{product_id}.html"
         return f"https://so.szlcsc.com/global.html?k={urllib.parse.quote(code)}"
 
+    @staticmethod
+    def _china_detail(value: dict[str, Any]) -> dict[str, Any]:
+        """Normalize one LCSC China/EasyEDA Pro search row to the detail schema."""
+        device = value.get("device_info") or {}
+        if not isinstance(device, dict):
+            device = {}
+        attributes = device.get("attributes") or {}
+        if not isinstance(attributes, dict):
+            attributes = {}
+        prices = []
+        for price in value.get("priceList") or []:
+            if not isinstance(price, dict) or price.get("price") in (None, ""):
+                continue
+            prices.append(
+                {
+                    "currencyPrice": str(price["price"]),
+                    "currencySymbol": "￥",
+                    "startPurchasedNumber": price.get("startNumber"),
+                }
+            )
+        pdf_url = str(attributes.get("Datasheet") or value.get("pdfFileUrl") or "")
+        if pdf_url.startswith("/"):
+            pdf_url = urllib.parse.urljoin("https://pro.lceda.cn", pdf_url)
+        return {
+            "productCode": str(value.get("code") or attributes.get("Supplier Part") or ""),
+            "productId": value.get("id"),
+            "productModel": str(value.get("model") or attributes.get("Manufacturer Part") or ""),
+            "brandNameEn": str(value.get("brandName") or attributes.get("Manufacturer") or ""),
+            "encapStandard": str(value.get("standard") or attributes.get("Supplier Footprint") or ""),
+            "stockNumber": value.get("stockNumber", ""),
+            "productPriceList": prices,
+            "currencySymbol": "￥",
+            "pdfUrl": pdf_url,
+            "productIntroEn": str(
+                value.get("desc") or device.get("description") or value.get("name") or ""
+            ),
+            "_partsbridge_source": "lcsc_china",
+        }
+
     @classmethod
     def _candidate(cls, value: dict[str, Any], query: str, *, exact: bool = False) -> Candidate:
         code = str(value.get("productCode") or value.get("code") or "")
@@ -168,7 +208,9 @@ class LCSCClient:
             stock=stock,
             price=price,
             currency=currency,
-            price_source="global",
+            price_source=(
+                "china" if value.get("_partsbridge_source") == "lcsc_china" else "global"
+            ),
             product_url=cls._domestic_url(value, code),
             global_product_url=global_url,
             datasheet_url=str(value.get("pdfUrl") or ""),
@@ -249,6 +291,45 @@ class LCSCClient:
             deduped.append(item)
         return deduped[:limit]
 
+    def _china_search(self, query: str, limit: int) -> list[Candidate]:
+        data = self._json(
+            LCSC_CHINA_SEARCH_URL
+            + "?"
+            + urllib.parse.urlencode(
+                {"keyword": query, "type": 3, "page": 1, "pageSize": max(1, limit)}
+            )
+        )
+        if data.get("success") is False:
+            raise ClientError("LCSC China search reported failure")
+        result = data.get("result") or {}
+        if not isinstance(result, dict):
+            raise ClientError("unexpected LCSC China search schema")
+        products = result.get("productList") or []
+        if not isinstance(products, list):
+            raise ClientError("unexpected LCSC China productList schema")
+        normalized_query = query.casefold()
+        rows: list[Candidate] = []
+        seen: set[str] = set()
+        for value in products:
+            if not isinstance(value, dict):
+                continue
+            detail = self._china_detail(value)
+            code = str(detail.get("productCode") or "")
+            model = str(detail.get("productModel") or "")
+            key = code.casefold() or model.casefold()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            rows.append(
+                self._candidate(
+                    detail,
+                    query,
+                    exact=normalized_query in {code.casefold(), model.casefold()},
+                )
+            )
+        rows.sort(key=lambda item: not item.exact)
+        return rows[:limit]
+
     def search(self, query: str, *, limit: int = 10, in_stock: bool = False) -> list[Candidate]:
         query = query.strip()
         if not query:
@@ -258,6 +339,13 @@ class LCSCClient:
             detail = self.get_detail(query)
             item = self._candidate(detail, query, exact=True)
             return [item] if (not in_stock or self._in_stock(item)) else []
+
+        try:
+            china_rows = self._china_search(query, limit)
+        except ClientError:
+            china_rows = []
+        if china_rows:
+            return [item for item in china_rows if not in_stock or self._in_stock(item)][:limit]
 
         data = self._json(LCSC_SEARCH_URL, payload={"keyword": query})
         result = data.get("result") or {}
@@ -281,6 +369,13 @@ class LCSCClient:
         code = code.strip().upper()
         if not _CODE_RE.fullmatch(code):
             raise ClientError(f"invalid LCSC code: {code}")
+        try:
+            china_rows = self._china_search(code, 20)
+        except ClientError:
+            china_rows = []
+        for item in china_rows:
+            if item.lcsc.upper() == code and isinstance(item.raw, dict):
+                return item.raw
         data = self._json(LCSC_DETAIL_URL + "?" + urllib.parse.urlencode({"productCode": code}))
         result = data.get("result")
         if not isinstance(result, dict) or not result:

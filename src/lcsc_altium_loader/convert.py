@@ -579,6 +579,52 @@ def _add_symbol(symbol_lib: Any, symbol_data: Any, name: str, footprint_name: st
     return symbol, written
 
 
+def _normalized_step_z_offset_mils(
+    step_data: bytes,
+    *,
+    model_name: str,
+    source_min_z_mils: float,
+    rotation_degrees: dict[str, float],
+    warnings: list[str],
+) -> tuple[float, dict[str, Any]]:
+    """Map the STEP's geometric bottom to EasyEDA's intended minimum Z."""
+    placement: dict[str, Any] = {
+        "normalization": "source_offset_fallback",
+        "source_min_z_mils": round(float(source_min_z_mils), 6),
+    }
+    try:
+        bounds = altium.compute_step_model_bounds_mils(
+            step_data,
+            filename_hint=model_name,
+            rotation_x_degrees=rotation_degrees["rotation_x_degrees"],
+            rotation_y_degrees=rotation_degrees["rotation_y_degrees"],
+            rotation_z_degrees=rotation_degrees["rotation_z_degrees"],
+            z_offset_mils=0.0,
+        )
+    except Exception as exc:
+        placement["error"] = str(exc)
+        warnings.append(
+            "3D STEP Z normalization unavailable; retained the source Z offset: "
+            f"{exc}"
+        )
+        return float(source_min_z_mils), placement
+
+    raw_min_z_mils = float(bounds.min_z_mils)
+    raw_max_z_mils = float(bounds.max_z_mils)
+    resolved_z_offset_mils = float(source_min_z_mils) - raw_min_z_mils
+    placement.update(
+        {
+            "normalization": "step_bottom_to_source_min_z",
+            "raw_step_min_z_mils": round(raw_min_z_mils, 6),
+            "raw_step_max_z_mils": round(raw_max_z_mils, 6),
+            "resolved_z_offset_mils": round(resolved_z_offset_mils, 6),
+            "final_min_z_mils": round(float(source_min_z_mils), 6),
+            "final_max_z_mils": round(raw_max_z_mils + resolved_z_offset_mils, 6),
+        }
+    )
+    return resolved_z_offset_mils, placement
+
+
 def _add_footprint(pcb_lib: Any, footprint_data: Any, name: str, component: dict[str, Any], warnings: list[str], *, step_data: bytes | None = None, three_d_requested: bool = False) -> tuple[Any, dict[str, int], dict[str, Any]]:
     counts = _footprint_counts(footprint_data)
     if counts["SVGNODE"] and "SVGNODE metadata retained only for optional 3D; graphic node skipped" not in warnings:
@@ -768,7 +814,15 @@ def _add_footprint(pcb_lib: Any, footprint_data: Any, name: str, component: dict
                 f"rotation_{axis}_degrees": _number(getattr(rotation, axis, 0.0))
                 for axis in ("x", "y", "z")
             }
-            z_offset_mils = _number(getattr(translation, "z", 0.0)) * MM_TO_MIL
+            source_min_z_mils = _number(getattr(translation, "z", 0.0)) * MM_TO_MIL
+            z_offset_mils, placement = _normalized_step_z_offset_mils(
+                step_data,
+                model_name=model_name,
+                source_min_z_mils=source_min_z_mils,
+                rotation_degrees=rotation_degrees,
+                warnings=warnings,
+            )
+            three_d["placement"] = placement
             # The native merge copies the body's pose into the model record.
             # Author both consistently so a merge preserves metadata exactly.
             model = pcb_lib.add_embedded_model(

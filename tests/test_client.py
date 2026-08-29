@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 from lcsc_altium_loader.client import (
     EASYEDA_COMPONENT_URL,
     LCSC_CATEGORY_URL,
+    LCSC_CHINA_SEARCH_URL,
     LCSC_DETAIL_URL,
     LCSC_SEARCH_URL,
     ClientError,
@@ -24,7 +25,14 @@ class StubClient(LCSCClient):
 
     def _json(self, url: str, *, payload: dict | None = None) -> dict:
         self.calls.append((url, payload))
-        key = LCSC_DETAIL_URL if url.startswith(LCSC_DETAIL_URL + "?") else url
+        if url.startswith(LCSC_DETAIL_URL + "?"):
+            key = LCSC_DETAIL_URL
+        elif url.startswith(LCSC_CHINA_SEARCH_URL + "?"):
+            key = LCSC_CHINA_SEARCH_URL
+        else:
+            key = url
+        if key == LCSC_CHINA_SEARCH_URL and key not in self.responses:
+            return {"success": True, "result": {"total": 0, "productList": []}}
         return self.responses[key]
 
 
@@ -42,7 +50,94 @@ def product(code: str, *, product_id: int, stock: int, mpn: str = "PART") -> dic
     }
 
 
+def china_product(code: str, *, product_id: int, stock: int, mpn: str = "PART") -> dict:
+    return {
+        "code": code,
+        "id": product_id,
+        "model": mpn,
+        "brandName": "MORNSUN(金升阳)",
+        "standard": "SMD-9",
+        "stockNumber": str(stock),
+        "priceList": [{"startNumber": 1, "endNumber": 9, "price": 32.53}],
+        "name": "单通道高速CAN隔离收发器",
+        "device_info": {
+            "description": "中国站元件",
+            "attributes": {"Datasheet": "https://item.szlcsc.com/datasheet/example.html"},
+        },
+    }
+
+
 class LCSCClientTests(unittest.TestCase):
+    def test_china_mpn_search_returns_domestic_stock_price_and_exact_code(self) -> None:
+        client = StubClient(
+            {
+                LCSC_CHINA_SEARCH_URL: {
+                    "success": True,
+                    "result": {
+                        "total": 1,
+                        "productList": [
+                            china_product(
+                                "C7527764", product_id=8623563, stock=2, mpn="TD331SCANH"
+                            )
+                        ],
+                    },
+                }
+            }
+        )
+
+        result = client.search("TD331SCANH", in_stock=True)
+
+        self.assertEqual([item.lcsc for item in result], ["C7527764"])
+        self.assertTrue(result[0].exact)
+        self.assertEqual(result[0].stock, "2")
+        self.assertEqual(result[0].price, "32.53")
+        self.assertEqual(result[0].currency, "CNY")
+        self.assertEqual(result[0].price_source, "china")
+        self.assertEqual(result[0].product_url, "https://item.szlcsc.com/8623563.html")
+        self.assertEqual(len(client.calls), 1)
+        self.assertTrue(client.calls[0][0].startswith(LCSC_CHINA_SEARCH_URL + "?"))
+
+    def test_china_c_code_search_supplies_detail_without_global_endpoint(self) -> None:
+        client = StubClient(
+            {
+                LCSC_CHINA_SEARCH_URL: {
+                    "success": True,
+                    "result": {
+                        "total": 1,
+                        "productList": [
+                            china_product(
+                                "C7527764", product_id=8623563, stock=2, mpn="TD331SCANH"
+                            )
+                        ],
+                    },
+                }
+            }
+        )
+
+        result = client.search("C7527764", in_stock=True)
+
+        self.assertEqual([item.mpn for item in result], ["TD331SCANH"])
+        self.assertEqual(len(client.calls), 1)
+        self.assertTrue(client.calls[0][0].startswith(LCSC_CHINA_SEARCH_URL + "?"))
+
+    def test_china_out_of_stock_result_does_not_fall_through_to_global_search(self) -> None:
+        client = StubClient(
+            {
+                LCSC_CHINA_SEARCH_URL: {
+                    "success": True,
+                    "result": {
+                        "total": 1,
+                        "productList": [
+                            china_product("C9", product_id=9, stock=0, mpn="DOMESTIC-ONLY")
+                        ],
+                    },
+                }
+            }
+        )
+
+        self.assertEqual(client.search("DOMESTIC-ONLY", in_stock=True), [])
+        self.assertEqual(len(client.calls), 1)
+
     def test_c_code_uses_detail_and_labels_global_price(self) -> None:
         client = StubClient({LCSC_DETAIL_URL: {"result": product("C8734", product_id=9243, stock=12)}})
 
@@ -62,7 +157,8 @@ class LCSCClientTests(unittest.TestCase):
         result = client.search("STM32F103C8T6")
 
         self.assertEqual([item.lcsc for item in result], ["C8734"])
-        self.assertEqual([url for url, _ in client.calls], [LCSC_SEARCH_URL])
+        self.assertTrue(client.calls[0][0].startswith(LCSC_CHINA_SEARCH_URL + "?"))
+        self.assertEqual(client.calls[1][0], LCSC_SEARCH_URL)
 
     def test_broad_search_uses_leaf_catalog_and_filters_stock(self) -> None:
         sold_out = product("C1", product_id=1, stock=0)

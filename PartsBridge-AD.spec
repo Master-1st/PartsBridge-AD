@@ -6,7 +6,7 @@ from PyInstaller.utils.hooks import collect_all, collect_data_files, copy_metada
 from PyInstaller.utils.win32 import versioninfo
 
 
-app_version = (0, 3, 5, 0)
+app_version = (0, 3, 8, 0)
 version_resource = versioninfo.VSVersionInfo(
     ffi=versioninfo.FixedFileInfo(filevers=app_version, prodvers=app_version),
     kids=[
@@ -17,12 +17,12 @@ version_resource = versioninfo.VSVersionInfo(
                     [
                         versioninfo.StringStruct('CompanyName', 'foke'),
                         versioninfo.StringStruct('FileDescription', 'PartsBridge AD'),
-                        versioninfo.StringStruct('FileVersion', '0.3.5.0'),
+                        versioninfo.StringStruct('FileVersion', '0.3.8.0'),
                         versioninfo.StringStruct('InternalName', 'PartsBridge-AD'),
                         versioninfo.StringStruct('LegalCopyright', 'Copyright (c) 2026 foke'),
                         versioninfo.StringStruct('OriginalFilename', 'PartsBridge-AD.exe'),
                         versioninfo.StringStruct('ProductName', 'PartsBridge AD'),
-                        versioninfo.StringStruct('ProductVersion', '0.3.5.0'),
+                        versioninfo.StringStruct('ProductVersion', '0.3.8.0'),
                     ],
                 )
             ]

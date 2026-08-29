@@ -7,7 +7,7 @@ Source installations use the following direct dependencies. Windows releases bun
 - `easyeda2kicad 1.0.1` — GNU Affero General Public License v3.0; source: <https://github.com/uPesy/easyeda2kicad.py>
 - `altium-monkey 2026.8.21` — GNU Affero General Public License v3.0 or later; source: <https://github.com/wavenumber-eng/altium_monkey>
 
-## Windows v0.3.5 runtime dependencies
+## Windows v0.3.8 runtime dependencies
 
 | Component | Version | License / upstream source |
 | --- | --- | --- |
